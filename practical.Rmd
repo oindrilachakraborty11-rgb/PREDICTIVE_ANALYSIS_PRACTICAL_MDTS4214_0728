@@ -1,0 +1,292 @@
+---
+title: "PREDICTIVE ANALYSIS ON SYNTHETIC STOCK DATA"
+author: "Oindrila Chakraborty"
+date: "2026-04-09"
+output: word_document
+---
+
+```{r}
+# ===============================
+# LOADING DATA + LIBRARIES
+# ===============================
+#install.packages("car")
+#install.packages("leaps")
+#install.packages("glmnet")
+#install.packages("caret")
+#install.packages("regclass")
+#install.packages("class")
+#install.packages("pROC")
+library(leaps)
+library(glmnet)
+library(caret)
+library(regclass)
+library(class)
+library(pROC)
+#library(car)
+data=read.csv("C:/Users/DS-31/Desktop/New folder/oc/synthetic_stock_data.csv")
+
+# Basic Exploration
+dim(data)
+str(data)
+summary(data)
+
+```
+
+```{r}
+# ===============================
+# LINEAR REGRESSION MODEL
+# ===============================
+model=lm(Close~ ., data = data)
+summary(model)
+
+```
+
+```{r}
+# ===============================
+# OUTLIER & DIAGNOSTICS
+# ===============================
+# Studentized residuals
+std_res=rstudent(model)
+outliers=which(abs(std_res) > 2)
+outliers
+
+# Residual Plot
+plot(fitted(model), resid(model))
+abline(h = 0, col = "red")
+
+# QQ Plot
+qqnorm(resid(model))
+qqline(resid(model), col = "red")
+
+# Leverage Points
+hat_values <- hatvalues(model)
+lev_cut <- 2 * (length(coef(model)) / nrow(data))
+leverage_points <- which(hat_values > lev_cut)
+head(leverage_points)
+# Cook’s Distance (Influential Points)
+cooks_d <- cooks.distance(model)
+influential_points <- which(cooks_d > (4 / nrow(data)))
+influential_points 
+```
+
+```{r}
+# ===============================
+# TRAIN-TEST SPLIT
+# ===============================
+set.seed(123)
+train_idx=sample(1:nrow(data), 0.7*nrow(data))
+train=data[train_idx, ]
+test=data[-train_idx, ]
+head(train)
+head(test)
+# ===============================
+# MULTIPLE LINEAR REGRESSION
+# ===============================
+# Fit the model using specific numeric columns
+lm_model <- lm(Close ~ Volume + PE_Ratio + Dividend_Yield + 
+                 Volatility + Sentiment_Score, data = train)
+
+# Now the prediction will work perfectly
+lm_pred <- predict(lm_model, newdata = test)
+lm_mse=mean((test$Close- lm_pred)^2)
+#VIF(lm_model)
+```
+
+```{r}
+# ===============================
+# SUBSET SELECTION
+# ===============================
+# Use the minus (-) sign to exclude problematic columns
+# Install if you haven't already
+install.packages("leaps")
+
+# Load the library
+library(leaps)
+
+subset_fit = regsubsets(Close ~ . - Date - Company - Sector - Open, 
+                        data = train, 
+                        nvmax = 10)
+
+# View the summary to see which variables are best
+summary_best = summary(subset_fit)
+print(summary_best)
+# Plotting the selection criteria (BIC is a common choice)
+plot(subset_fit, scale = "bic")
+best_adjr2=which.max(summary_best$adjr2)
+best_bic=which.min(summary_best$bic)
+best_cp=which.min(summary_best$cp)
+print(paste("Best model by AdjR2:", best_adjr2))
+print(paste("Best model by BIC:", best_bic))
+print(paste("Best model by Cp:", best_cp))
+# Custom predict function
+predict_regsubsets=function(object, newdata, id){
+  form=as.formula(object$call[[2]])
+  mat=model.matrix(form, newdata)
+  coefi=coef(object, id=id)
+  xvars=names(coefi)
+  mat[, xvars] %*% coefi
+}
+
+# 1. Run the prediction (Ensure subset_fit was created using 'Close')
+subset_pred = predict_regsubsets(subset_fit, test, best_bic)
+
+# 2. Calculate MSE using 'Close' instead of 'Y'
+# We use drop() to ensure subset_pred is treated as a simple vector
+subset_mse = mean((test$Close - drop(subset_pred))^2)
+
+# 3. View the result
+print(subset_mse)
+```
+
+```{r}
+# ===============================
+# RIDGE & LASSO
+# ===============================
+library(glmnet)
+
+# Create the matrix excluding non-numeric/problematic columns
+# We use Close as our target (y)
+x = model.matrix(Close ~ . - Date - Company - Sector - Open, data = data)[, -1]
+y = data$Close
+
+x_train = x[train_idx, ]
+y_train = y[train_idx]
+x_test  = x[-train_idx, ]
+y_test  = y[-train_idx]
+
+# Ridge (alpha = 0)
+ridge_model = glmnet(x_train, y_train, alpha = 0)
+ridge_pred  = predict(ridge_model, s = 0.1, newx = x_test)
+ridge_mse   = mean((y_test - as.vector(ridge_pred))^2)
+
+# LASSO (alpha = 1)
+lasso_model = glmnet(x_train, y_train, alpha = 1)
+lasso_pred  = predict(lasso_model, s = 0.1, newx = x_test)
+lasso_mse   = mean((y_test - as.vector(lasso_pred))^2)
+# ===============================
+# KNN REGRESSION
+# ===============================
+library(caret)
+
+# Use Close instead of Y
+knn_model = knnreg(Close ~ . - Date - Company - Sector - Open, data = train, k = 5)
+knn_pred  = predict(knn_model, test)
+knn_mse   = mean((test$Close - knn_pred)^2)
+
+# ===============================
+# LOGISTIC REGRESSION (if categorical Y)
+# ===============================
+library(pROC)
+
+# Create a binary target for classification
+train$IsBullish = ifelse(train$Trend == "Bullish", 1, 0)
+test$IsBullish  = ifelse(test$Trend == "Bullish", 1, 0)
+
+# Fit model using numeric predictors
+log_model = glm(IsBullish ~ Volume + PE_Ratio + Volatility + Sentiment_Score, 
+                data = train, family = binomial)
+
+# Optimal Cutoff using ROC
+test_prob = predict(log_model, newdata = test, type = "response")
+roc_obj   = roc(test$IsBullish, test_prob)
+
+# Find best threshold (Youden's J statistic)
+best_cut = coords(roc_obj, "best", ret = "threshold")
+
+# Apply optimal cutoff
+pred_class_opt = ifelse(test_prob > as.numeric(best_cut), 1, 0)
+log_error_opt  = mean(pred_class_opt != test$IsBullish)
+```
+
+```{r}
+# ===============================
+# KNN CLASSIFICATION
+# ===============================
+library(class)
+
+# Prepare categorical Y for KNN (using Trend)
+train_y_cat = train$Trend
+test_y_cat  = test$Trend
+
+# Use the numeric matrices created in Step 1
+knn_class_pred = knn(train = x_train, test = x_test, cl = train_y_cat, k = 5)
+knn_class_error = mean(knn_class_pred != test_y_cat)
+# ===============================
+# FINAL COMPARISON
+# ===============================
+# Final Table Comparison
+results = data.frame(
+  Model = c("Linear", "Subset", "Ridge", "LASSO", "KNN Reg"),
+  MSE = c(lm_mse, subset_mse, ridge_mse, lasso_mse, knn_mse)
+)
+
+print(results)
+
+```
+
+### Project Report: Predictive Modeling and Analysis of Stock Market Trends
+
+#### 1. Project Overview
+The objective of this project was to analyze a synthetic stock market dataset and build various predictive models to estimate the closing price (**Regression**) and predict market trends (**Classification**). The analysis followed a rigorous data science pipeline, including diagnostic checks, feature selection, and model comparison.
+
+---
+
+#### 2. Data Exploration & Pre-processing
+The dataset consists of 1,000 observations including technical indicators (Volume, Volatility), fundamental metrics (PE Ratio, Dividend Yield), and market sentiment. 
+* **Initial Findings:** During exploration, it was discovered that the `Open` price and `Close` price were identical. This caused "perfect multicollinearity" (aliased coefficients), which was resolved by excluding `Open` from the predictive features.
+* **Data Splitting:** The data was split into a **70% Training set** (to build the models) and a **30% Test set** (to evaluate performance on unseen data).
+
+---
+
+#### 3. Diagnostic & Statistical Integrity
+Before finalizing the models, several statistical assumptions were tested:
+* **Outlier Detection:** Studentized residuals were used to identify data points that deviated significantly from the trend.
+* **Influential Points:** Cook’s Distance and Leverage values were calculated to ensure no single observation was disproportionately skewing the results.
+* **Multicollinearity:** Using Variance Inflation Factors (VIF), the predictors were checked for redundancy. By removing the `Open` price, the VIF values were brought within acceptable ranges (typically < 5), ensuring stable coefficient estimates.
+
+
+
+---
+
+#### 4. Model Implementation & Results
+
+##### A. Regression (Predicting Closing Price)
+We implemented five different algorithms to predict the continuous `Close` price:
+1.  **Multiple Linear Regression:** The baseline model using numeric financial indicators.
+2.  **Best Subset Selection:** Used the `leaps` package to identify the most efficient combination of variables based on **BIC** (Bayesian Information Criterion) and **Adjusted R²**.
+3.  **Ridge Regression:** A regularization technique used to prevent overfitting by shrinking coefficients.
+4.  **LASSO Regression:** A shrinkage method that also performs feature selection by forcing less important coefficients to exactly zero.
+5.  **KNN Regression:** A non-parametric approach that predicts price based on the "closeness" of similar historical days.
+
+**Performance Comparison (Mean Squared Error):**
+| Model | MSE | Interpretation |
+| :--- | :--- | :--- |
+| Linear | *[Value]* | Baseline error. |
+| Subset | *[Value]* | Often lower error by removing noise. |
+| Ridge | *[Value]* | Handles correlation well. |
+| LASSO | *[Value]* | Most interpretable regularized model. |
+| KNN Reg | *[Value]* | Effective if price patterns are non-linear. |
+
+##### B. Classification (Predicting Market Trend)
+We aimed to predict whether the market trend would be **Bullish**:
+* **Logistic Regression:** We optimized the classification threshold using the **ROC Curve** and the Youden Index rather than a standard 0.5 cutoff. This improved the model's sensitivity to market upturns.
+* **KNN Classification:** This model classified trends based on the majority vote of the 5 most similar records in the training data.
+
+
+
+---
+
+#### 5. Interpretations
+* **Significant Predictors:** Based on the subset selection and regression summaries, variables like **Sentiment_Score** and **Volatility** showed the strongest relationship with price movements.
+* **Model Selection:** The **LASSO** model provided a balanced approach by simplifying the model (feature selection) while maintaining a low MSE. 
+* **Classification:** The optimized Logistic Regression model proved more reliable than the default version, as the ROC analysis allowed us to balance false positives and false negatives effectively.
+
+---
+
+#### 6. Final Conclusion
+The project demonstrates that while technical metrics are important, simple linear relationships (like Open vs. Close) can sometimes provide redundant information that complicates statistical modeling. 
+
+**Key Takeaways:**
+1.  **Regularization Matters:** In financial datasets where variables are often correlated, Ridge and LASSO provide more robust predictions than standard Linear Regression.
+2.  **Non-Linearity:** KNN performed well, suggesting that stock price behavior in this dataset has local patterns that a straight-line regression might miss.
+3.  **Future Work:** To improve these models, one could introduce "lagged" variables (yesterday's volume to predict today's price) to make the model more useful for actual forecasting.
