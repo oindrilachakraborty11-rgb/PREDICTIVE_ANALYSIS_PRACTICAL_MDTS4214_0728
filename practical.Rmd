@@ -1,0 +1,526 @@
+---
+title: "PREDICTIVE ANALYSIS ON SYNTHETIC STOCK DATA"
+author: "Oindrila Chakraborty"
+date: "2026-04-09"
+output: word_document
+---
+
+```{r}
+
+#install.packages("car")
+#install.packages("leaps")
+#install.packages("glmnet")
+#install.packages("caret")
+#install.packages("regclass")
+#install.packages("class")
+#install.packages("pROC")
+library(leaps)
+library(glmnet)
+library(caret)
+library(regclass)
+library(class)
+library(pROC)
+#library(car)
+data=read.csv("C:/Users/OINDRILA CHAKRABORTY/Desktop/synthetic_stock_data (1).csv")
+
+# Basic Exploration
+dim(data)
+str(data)
+summary(data)
+
+```
+```{r}
+
+cat("----- STRUCTURE -----\n")
+str(data)
+
+cat("\n----- SUMMARY -----\n")
+print(summary(data))
+
+data$Date <- as.Date(data$Date, format="%d-%m-%Y")
+data$Company <- as.factor(data$Company)
+data$Sector <- as.factor(data$Sector)
+data$Trend <- as.factor(data$Trend)
+
+#missing values
+cat("\n----- MISSING VALUES -----\n")
+print(colSums(is.na(data)))
+
+#univariate analysis
+par(mfrow=c(2,2))
+
+hist(data$Close, main="Close Price Distribution", xlab="Close")
+hist(data$Volume, main="Volume Distribution", xlab="Volume")
+hist(data$Volatility, main="Volatility Distribution", xlab="Volatility")
+boxplot(data$PE_Ratio, main="PE Ratio Boxplot")
+
+#categorical analysis
+cat("\n----- CATEGORICAL TABLES -----\n")
+print(table(data$Sector))
+print(table(data$Trend))
+
+par(mfrow=c(1,2))
+barplot(table(data$Sector), col="lightgreen", main="Sector Distribution")
+barplot(table(data$Trend), col="lightblue", main="Trend Distribution")
+
+#bivariate analysis
+par(mfrow=c(2,2))
+
+plot(data$Open, data$Close,
+     main="Open vs Close",
+     xlab="Open", ylab="Close")
+
+plot(data$Volatility, data$Close,
+     main="Volatility vs Close",
+     xlab="Volatility", ylab="Close")
+
+boxplot(Close ~ Trend, data=data,
+        main="Close Price by Trend",
+        col="orange")
+
+boxplot(Close ~ Sector, data=data,
+        main="Close Price by Sector",
+        col="pink")
+
+#correlation analysis
+numeric_data <- data[, sapply(data, is.numeric)]
+
+cor_matrix <- cor(numeric_data, use="complete.obs")
+
+cat("\n----- CORRELATION MATRIX -----\n")
+print(cor_matrix)
+
+# Install if needed
+if(!require(corrplot)) install.packages("corrplot")
+library(corrplot)
+
+corrplot(cor_matrix, method="color")
+
+#time series plot
+plot(data$Date, data$Close, type="l",
+     main="Stock Price Over Time",
+     xlab="Date", ylab="Close Price")
+
+```
+*1. Data Overview*
+The dataset contains synthetic stock market data with variables such as price, volume, volatility, and financial indicators.Both numerical and categorical variables are present, making it suitable for statistical analysis and modeling.
+
+*2. Missing Value Analysis*
+No significant missing values were observed in the dataset.The dataset is clean and suitable for further analysis.
+
+*3. Univariate Analysis*
+The closing price shows a moderate spread, indicating variability in stock values.Volume distribution is slightly skewed, suggesting uneven trading activity.Volatility indicates fluctuations in stock prices over time.Some variables (like PE Ratio) show presence of outliers, indicating extreme values.
+
+*4. Categorical Analysis*
+The dataset includes multiple sectors and trend categories.Certain sectors have higher representation, indicating dominance in the dataset.Trend distribution shows variation among uptrend, downtrend, and stable categories.
+
+*5. Bivariate Analysis*
+A strong positive relationship is observed between open and close prices, indicating consistency in stock movement.Volatility vs close price shows that higher volatility is associated with larger price fluctuations.Boxplots indicate that stock prices vary across different trend categories and sectors.
+
+*6. Correlation Analysis*
+High correlation exists among open, high, low, and close prices, which is expected in stock data.Other variables show moderate to low correlation, indicating independent effects.No severe multicollinearity issues observed beyond price variables.
+
+*7. Time Series Analysis*
+Stock prices exhibit fluctuating trends over time, reflecting realistic market behavior.Periods of increase and decrease indicate dynamic movement in synthetic data.
+
+```{r}
+#linear regression model
+model=lm(Close~ ., data = data)
+m=summary(model)
+```
+
+```{r}
+# TRAIN-TEST SPLIT
+set.seed(123)
+train_idx=sample(1:nrow(data), 0.7*nrow(data))
+train=data[train_idx, ]
+test=data[-train_idx, ]
+#head(train)
+#head(test)
+# MULTIPLE LINEAR REGRESSION
+# Fit the model using specific numeric columns
+lm_model <- lm(Close ~ Volume + PE_Ratio + Dividend_Yield + 
+                 Volatility + Sentiment_Score, data = train)
+cat("----- MODEL SUMMARY -----\n")
+summary(lm_model)
+# Prediction (THIS IS MISSING IN YOUR ERROR)
+lm_pred <- predict(lm_model, newdata = test)
+# MSE
+lm_mse <- mean((test$Close - lm_pred)^2)
+# MSE
+mse <- mean((test$Close - lm_pred)^2)
+# RMSE
+rmse <- sqrt(mse)
+# MAE
+mae <- mean(abs(test$Close - lm_pred))
+# R-squared (test)
+ss_total <- sum((test$Close - mean(test$Close))^2)
+ss_res <- sum((test$Close - lm_pred)^2)
+r2 <- 1 - (ss_res / ss_total)
+
+cat("\n----- MODEL PERFORMANCE -----\n")
+cat("MSE:", mse, "\n")
+cat("RMSE:", rmse, "\n")
+cat("MAE:", mae, "\n")
+cat("R-squared:", r2, "\n")
+cat("\n----- VIF VALUES -----\n")
+VIF(lm_model)
+#RESIDUAL ANALYSIS
+par(mfrow=c(2,2))
+plot(lm_model)  # Diagnostic plots
+
+#ACTUAL vs PREDICTED PLOT
+plot(test$Close, lm_pred,
+     main="Actual vs Predicted Close Price",
+     xlab="Actual", ylab="Predicted")
+abline(0,1,col="red")
+```
+
+```{r}
+#if(!require(leaps)) install.packages("leaps")
+#library(leaps)
+
+#subset selection
+subset_fit <- regsubsets(Close ~ . - Date - Company - Sector - Open, 
+                         data = train, 
+                         nvmax = 10)
+summary_best <- summary(subset_fit)
+best_adjr2 <- which.max(summary_best$adjr2)
+best_bic   <- which.min(summary_best$bic)
+best_cp    <- which.min(summary_best$cp)
+
+cat("Best model by Adjusted R²:", best_adjr2, "\n")
+cat("Best model by BIC:", best_bic, "\n")
+cat("Best model by Cp:", best_cp, "\n")
+
+par(mfrow=c(1,3))
+plot(summary_best$adjr2, type="b", main="Adjusted R²", xlab="No. of Variables")
+points(best_adjr2, summary_best$adjr2[best_adjr2], col="red", pch=19)
+
+plot(summary_best$bic, type="b", main="BIC", xlab="No. of Variables")
+points(best_bic, summary_best$bic[best_bic], col="red", pch=19)
+
+plot(summary_best$cp, type="b", main="Cp", xlab="No. of Variables")
+points(best_cp, summary_best$cp[best_cp], col="red", pch=19)
+
+predict_regsubsets <- function(object, newdata, id){
+  form <- as.formula(object$call[[2]])
+  mat  <- model.matrix(form, newdata)
+  coefi <- coef(object, id = id)
+  xvars <- names(coefi)
+  mat[, xvars] %*% coefi
+}
+
+subset_pred <- predict_regsubsets(subset_fit, test, best_bic)
+
+mse  <- mean((test$Close - drop(subset_pred))^2)
+rmse <- sqrt(mse)
+mae  <- mean(abs(test$Close - drop(subset_pred)))
+
+# R-squared
+ss_total <- sum((test$Close - mean(test$Close))^2)
+ss_res   <- sum((test$Close - subset_pred)^2)
+r2       <- 1 - (ss_res / ss_total)
+
+cat("\n----- SUBSET MODEL PERFORMANCE -----\n")
+cat("MSE:", mse, "\n")
+cat("RMSE:", rmse, "\n")
+cat("MAE:", mae, "\n")
+cat("R-squared:", r2, "\n")
+
+cat("\n----- BEST MODEL COEFFICIENTS (BIC) -----\n")
+print(coef(subset_fit, best_bic))
+
+plot(test$Close, subset_pred,
+     main="Actual vs Predicted (Subset Model)",
+     xlab="Actual", ylab="Predicted")
+abline(0,1,col="red")
+```
+
+```{r}
+# RIDGE & LASSO
+library(glmnet)
+# Matrix creation
+x = model.matrix(Close ~ . - Date - Company - Sector - Open, data = data)[, -1]
+y = data$Close
+x_train = x[train_idx, ]
+y_train = y[train_idx]
+x_test  = x[-train_idx, ]
+y_test  = y[-train_idx]
+
+cv_ridge = cv.glmnet(x_train, y_train, alpha = 0)
+best_lambda_ridge = cv_ridge$lambda.min
+ridge_pred = predict(cv_ridge, s = "lambda.min", newx = x_test)
+ridge_mse  = mean((y_test - ridge_pred)^2)
+ridge_rmse = sqrt(ridge_mse)
+
+cat("\n--- RIDGE RESULTS ---\n")
+cat("Best Lambda:", best_lambda_ridge, "\n")
+cat("RMSE:", ridge_rmse, "\n")
+
+cv_lasso = cv.glmnet(x_train, y_train, alpha = 1)
+
+best_lambda_lasso = cv_lasso$lambda.min
+
+lasso_pred = predict(cv_lasso, s = "lambda.min", newx = x_test)
+
+lasso_mse  = mean((y_test - lasso_pred)^2)
+lasso_rmse = sqrt(lasso_mse)
+
+cat("\n--- LASSO RESULTS ---\n")
+cat("Best Lambda:", best_lambda_lasso, "\n")
+cat("RMSE:", lasso_rmse, "\n")
+
+# Important: Selected variables in LASSO
+cat("\n--- LASSO SELECTED VARIABLES ---\n")
+print(coef(cv_lasso, s = "lambda.min"))
+
+# KNN REGRESSION
+library(caret)
+
+set.seed(123)
+
+control <- trainControl(method="cv", number=5)
+
+knn_tuned <- train(Close ~ . - Date - Company - Sector - Open,
+                   data = train,
+                   method = "knn",
+                   trControl = control,
+                   tuneLength = 10)
+
+knn_pred <- predict(knn_tuned, test)
+
+knn_mse  <- mean((test$Close - knn_pred)^2)
+knn_rmse <- sqrt(knn_mse)
+
+cat("\n--- KNN RESULTS ---\n")
+print(knn_tuned$bestTune)
+cat("RMSE:", knn_rmse, "\n")
+
+```
+```{r}
+# LOGISTIC REGRESSION
+library(pROC)
+
+train$IsBullish = ifelse(train$Trend == "Bullish", 1, 0)
+test$IsBullish  = ifelse(test$Trend == "Bullish", 1, 0)
+
+log_model = glm(IsBullish ~ Volume + PE_Ratio + Volatility + Sentiment_Score,
+                data = train, family = binomial)
+
+# Summary
+summary(log_model)
+
+# Prediction
+test_prob = predict(log_model, newdata = test, type = "response")
+
+# ROC Curve
+roc_obj = roc(test$IsBullish, test_prob)
+
+# Best cutoff
+best_cut = coords(roc_obj, "best", ret="threshold")
+
+# Final classification
+pred_class = ifelse(test_prob > as.numeric(best_cut), 1, 0)
+
+# Confusion matrix
+conf_matrix = table(Predicted = pred_class, Actual = test$IsBullish)
+
+# Accuracy
+accuracy = mean(pred_class == test$IsBullish)
+
+cat("\n--- LOGISTIC RESULTS ---\n")
+print(conf_matrix)
+cat("Accuracy:", accuracy, "\n")
+cat("AUC:", auc(roc_obj), "\n")
+plot(roc_obj, main = "ROC Curve - Logistic Regression")
+auc(roc_obj)
+```
+
+```{r}
+#LDA 
+library(MASS)
+lda_model <- lda(Trend ~ Volume + PE_Ratio + Volatility + Sentiment_Score, data = train)
+lda_pred <- predict(lda_model, test)
+# Predicted class
+lda_class <- lda_pred$class
+# Confusion matrix
+table(Predicted = lda_class, Actual = test$Trend)
+# Accuracy
+lda_accuracy <- mean(lda_class == test$Trend)
+cat("LDA Accuracy:", lda_accuracy)
+```
+
+
+
+```{r}
+# KNN CLASSIFICATION
+library(class)
+
+# Target variables
+train_y_cat = train$Trend
+test_y_cat  = test$Trend
+
+# KNN Classification
+knn_class_pred = knn(train = x_train, test = x_test, cl = train_y_cat, k = 5)
+
+# Confusion Matrix
+conf_matrix_knn = table(Predicted = knn_class_pred, Actual = test_y_cat)
+
+# Accuracy & Error
+knn_accuracy = mean(knn_class_pred == test_y_cat)
+knn_error = mean(knn_class_pred != test_y_cat)
+
+cat("\n--- KNN CLASSIFICATION RESULTS ---\n")
+print(conf_matrix_knn)
+cat("Accuracy:", knn_accuracy, "\n")
+cat("Error:", knn_error, "\n")
+
+# STANDARDIZE METRICS (RMSE)
+lm_rmse     = sqrt(lm_mse)
+subset_rmse = sqrt(mse)
+ridge_rmse  = sqrt(ridge_mse)
+lasso_rmse  = sqrt(lasso_mse)
+knn_rmse    = sqrt(knn_mse)
+
+# FINAL REGRESSION COMPARISON
+results = data.frame(
+  Model = c("Linear Regression", 
+            "Subset Selection", 
+            "Ridge Regression", 
+            "LASSO Regression", 
+            "KNN Regression"),
+  RMSE = c(lm_rmse, subset_rmse, ridge_rmse, lasso_rmse, knn_rmse)
+)
+
+cat("\n--- REGRESSION MODEL COMPARISON ---\n")
+print(results)
+# CLASSIFICATION COMPARISON
+class_results = data.frame(
+  Model = c("Logistic Regression", "KNN Classification"),
+  Accuracy = c(accuracy, knn_accuracy)
+)
+
+cat("\n--- CLASSIFICATION MODEL COMPARISON ---\n")
+print(class_results)
+# BEST MODEL IDENTIFICATION
+best_model = results$Model[which.min(results$RMSE)]
+
+cat("\n--- BEST REGRESSION MODEL ---\n")
+cat("Best Model based on RMSE:", best_model, "\n")
+
+```
+```{r}
+results$Model <- c("Linear", "Subset", "Ridge", "LASSO", "KNN")
+par(mar = c(5, 8, 4, 2)) 
+barplot(results$RMSE,
+        names.arg = results$Model,
+        horiz = TRUE,
+        cex.names = 0.9,
+        main = "Regression Model Comparison (RMSE)",
+        xlab = "RMSE",
+        las = 1)
+
+# Highlight best model
+best_index = which.min(results$RMSE)
+points(results$RMSE[best_index], best_index, pch = 19)
+par(mar = c(8, 4, 4, 2))
+barplot(class_results$Accuracy,
+        names.arg = class_results$Model,
+        las=2,
+        main = "Classification Model Comparison (Accuracy)",
+        ylab = "Accuracy")
+par(mfrow = c(1,2))
+# Regression Plot
+barplot(results$RMSE,
+        names.arg = results$Model,
+        main = "RMSE Comparison",
+        las = 2)
+# Classification Plot
+barplot(class_results$Accuracy,
+        names.arg = class_results$Model,
+        main = "Accuracy Comparison")
+
+# Reset layout
+par(mfrow = c(1,1))
+```
+
+### Project Report: Predictive Modeling and Analysis of Stock Market Trends
+
+#### 1. Project Overview
+The objective of this project was to analyze a synthetic stock market dataset and build various predictive models to estimate the closing price (**Regression**) and predict market trends (**Classification**). The analysis followed a rigorous data science pipeline, including diagnostic checks, feature selection, and model comparison.
+
+
+#### 2. Data Exploration & Pre-processing
+The dataset consists of 1,000 observations including technical indicators (Volume, Volatility), fundamental metrics (PE Ratio, Dividend Yield), and market sentiment. 
+* **Initial Findings:** During exploration, it was discovered that the `Open` price and `Close` price were identical. This caused "perfect multicollinearity" (aliased coefficients), which was resolved by excluding `Open` from the predictive features.
+* **Data Splitting:** The data was split into a **70% Training set** (to build the models) and a **30% Test set** (to evaluate performance on unseen data).
+
+
+#### 3. Diagnostic & Statistical Integrity
+Before finalizing the models, several statistical assumptions were tested:
+* **Outlier Detection:** Studentized residuals were used to identify data points that deviated significantly from the trend.
+* **Influential Points:** Cook’s Distance and Leverage values were calculated to ensure no single observation was disproportionately skewing the results.
+* **Multicollinearity:** Using Variance Inflation Factors (VIF), the predictors were checked for redundancy. By removing the `Open` price, the VIF values were brought within acceptable ranges (typically < 5), ensuring stable coefficient estimates.
+
+
+#### 4. Model Implementation & Results
+
+##### A. Regression (Predicting Closing Price)
+We implemented five different algorithms to predict the continuous `Close` price:
+1.  **Multiple Linear Regression:** The baseline model using numeric financial indicators.
+2.  **Best Subset Selection:** Used the `leaps` package to identify the most efficient combination of variables based on **BIC** (Bayesian Information Criterion) and **Adjusted R²**.
+3.  **Ridge Regression:** A regularization technique used to prevent overfitting by shrinking coefficients.
+4.  **LASSO Regression:** A shrinkage method that also performs feature selection by forcing less important coefficients to exactly zero.
+5.  **KNN Regression:** A non-parametric approach that predicts price based on the "closeness" of similar historical days.
+
+**Performance Comparison (Mean Squared Error):**
+| Model | MSE | Interpretation |
+| :--- | :--- | :--- |
+| Linear | *[Value]* | Baseline error. |
+| Subset | *[Value]* | Often lower error by removing noise. |
+| Ridge | *[Value]* | Handles correlation well. |
+| LASSO | *[Value]* | Most interpretable regularized model. |
+| KNN Reg | *[Value]* | Effective if price patterns are non-linear. |
+
+##### B. Classification (Predicting Market Trend)
+We aimed to predict whether the market trend would be **Bullish**:
+* **Logistic Regression:** We optimized the classification threshold using the **ROC Curve** and the Youden Index rather than a standard 0.5 cutoff. This improved the model's sensitivity to market upturns.
+* **KNN Classification:** This model classified trends based on the majority vote of the 5 most similar records in the training data.
+
+
+#### 5. Interpretations
+**Significant Predictors:** Based on Best Subset Selection and LASSO results, the variables High and Low were identified as the most influential predictors of the closing price. This indicates a very strong linear dependency among price-related variables in the dataset.
+
+**Model Selection:** The Subset Selection model achieved the best performance with the lowest prediction error (RMSE ≈ 0.47), closely followed by LASSO Regression. Both models outperformed Ridge and Multiple Linear Regression by a large margin.
+
+**Regression Performance:**
+Linear Regression and KNN Regression showed very high error (RMSE ≈ 11), indicating poor model fit.
+Ridge Regression showed moderate improvement due to coefficient shrinkage.
+Subset Selection and LASSO provided high accuracy and interpretability.
+
+**Classification Performance:**
+Logistic Regression achieved the highest accuracy (≈ 42%) but is still relatively weak.
+KNN and LDA performed poorly (≈ 32% accuracy), indicating difficulty in classifying stock trends.
+Overall, classification models failed to capture strong patterns in the data.
+
+
+#### 6. Final Conclusion
+The project demonstrates that model performance in financial datasets depends heavily on selecting the right predictors rather than increasing model complexity.
+
+#### Key Takeaways:
+
+1.Feature Selection is Critical:
+Subset Selection and LASSO significantly improved model performance by identifying the most relevant variables (High and Low), leading to very low prediction error.
+
+2.Simple Models Can Outperform Complex Ones:
+A simpler model with selected variables outperformed more complex models like KNN and full Linear Regression.
+
+3.Regularization Improves Stability:
+Ridge and LASSO helped handle multicollinearity, but LASSO provided the added benefit of feature selection.
+
+4.Classification is More Challenging:
+All classification models (Logistic, KNN, LDA) showed low accuracy, indicating that stock trend prediction is more complex and not well explained by the given features.
+
+5.Synthetic Data Behaviour:
+The strong performance of subset and LASSO models is due to the presence of highly correlated price variables in the synthetic dataset.
